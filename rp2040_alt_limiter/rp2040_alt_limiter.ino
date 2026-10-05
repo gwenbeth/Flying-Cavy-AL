@@ -81,7 +81,7 @@ int timer_list[] = {15000,30000,30000};
 unsigned long timer = timer_list[0];
 int altitude= altitude_list[0];
 
-int base_altitude=0;
+float base_altitude=0;  // float (not int) and averaged over ALT_HISTORY_SIZE readings at arm time (M7)
 unsigned long base_timer = 0;
 unsigned long loop_counter = 0;
 int arm_count = 0;
@@ -293,7 +293,15 @@ void loop() {
   } else {
     // arm if you can arm and the throttle is above 20%
     if ((state == Can_Arm || state == Done_Can_Rearm) && (in_value > 1200)) {
-      if(arm_count == 0) base_altitude = cur_altitude;
+      if (arm_count == 0) {
+        // Average the existing rolling history instead of trusting a
+        // single instantaneous reading (M7) -- previous_altitude_arr
+        // already holds the last ALT_HISTORY_SIZE (~500ms) of ground-level
+        // samples, so this costs no extra latency.
+        float ground_sum = 0;
+        for (int i = 0; i < ALT_HISTORY_SIZE; i++) ground_sum += previous_altitude_arr[i];
+        base_altitude = ground_sum / ALT_HISTORY_SIZE;
+      }
       Serial.println("starting arm");
       base_timer = now;
       state = Armmed;
