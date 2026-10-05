@@ -1,5 +1,5 @@
 // F5L altitude limiter by Gwen Scogin - 2026
-#include <Servo.h> 
+#include <Servo.h>
 
 #include <Wire.h>
 #include <SPI.h>
@@ -85,12 +85,12 @@ int base_altitude=0;
 unsigned long base_timer = 0;
 unsigned long loop_counter = 0;
 int arm_count = 0;
-// We are maintaining a history of the past readings of altitude.  When 
+// We are maintaining a history of the past readings of altitude.  When
 // we compute the vertical speed (vspd) we will look further back in time
 // than just the previous reading. This is because loop runs fast enough
-// that there might not be a detectable change in altitude.  
+// that there might not be a detectable change in altitude.
 float previous_altitude_arr[ALT_HISTORY_SIZE];
-int pa_idx = 0; 
+int pa_idx = 0;
 // there is no reason to do this every time through the loop
 float vspd_correction = 1000.0 / (DELAY_TIME * ALT_HISTORY_SIZE);
 
@@ -121,7 +121,7 @@ void setup() {
     pixels.show();
     while (1) delay(10);
   }
-  
+
   Serial.println(F("Setting temperature oversampling to 2X..."));
   bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
   Serial.println(F("Setting pressure oversampling to 16X..."));
@@ -138,8 +138,8 @@ void setup() {
   Serial.println(F("Configuring interrupt pin with data ready source..."));
   bmp.configureInterrupt(BMP5XX_INTERRUPT_LATCHED, BMP5XX_INTERRUPT_ACTIVE_HIGH, BMP5XX_INTERRUPT_PUSH_PULL, BMP5XX_INTERRUPT_DATA_READY, true);
 
-  
-  
+
+
   bmp.readTemperature(); // Without the readTemperature call we get bad values for altitude
 
   float cur_altitude = bmp.readAltitude();
@@ -199,7 +199,7 @@ int patterns[] = {
   0b1000000000,
   0b1000000000
 };
-  
+
 int alt_state = 2;
 
 
@@ -222,7 +222,7 @@ void blink(uint32_t ms) {
   default:
     s = 0;
   }
-  int light = (patterns[phase] >> s) & 1;  
+  int light = (patterns[phase] >> s) & 1;
   if (light) {
     pixels.fill(color);
     pixels.show();
@@ -249,7 +249,7 @@ int read_button(int pin) {
 }
 
 void loop() {
-  int out_value = 1000; // by default we are going to output 1000µs 
+  int out_value = 1000; // by default we are going to output 1000µs
 
   int in_value = pulseIn(2,HIGH,50000);
 
@@ -262,7 +262,7 @@ void loop() {
   // has been seen continuously for THROTTLE_LOW_MS after power up.
   if (state == Wait_For_Valid_Throttle) {
     if (in_value < THROTTLE_MIN_VALID_US || in_value > THROTTLE_LOW_US) {
-      // If we don't have a valid throttle signal 
+      // If we don't have a valid throttle signal
       throttle_low_start = now;
     } else if (now - throttle_low_start >= THROTTLE_LOW_MS) {
       state = Can_Arm;
@@ -271,21 +271,26 @@ void loop() {
     }
   }
   blink(now);
-  if (read_button(11) && (alt_state < 3)) {
+  // Lock the mode once the first arm has happened (M4): `alt_state < 3` was
+  // a leftover from before the state-machine refactor (E1) -- alt_state is
+  // now only ever 0-2, so that check was always true and never actually
+  // guarded anything. Without a real guard, a lower-altitude/shorter-time mode
+  // could be accidentally changedmid-flight (or during the relightwindow)
+  if (read_button(11) && (arm_count == 0)) {
     alt_state = (alt_state + 1) % 3;
     altitude = altitude_list[alt_state];
     timer = timer_list[alt_state];
   }
   float vspd = (cur_altitude - previous_altitude_arr[pa_idx]) * vspd_correction;
   if (state == Armmed) {
-    // disarm if above target alt  
+    // disarm if above target alt
     if (cur_altitude + (vspd * OVERSHOOT_FACTOR)> base_altitude + altitude) {
       state = Done_Cant_Rearm;
       color = DONE_COLOR;
       reason = Altitude;
-    } 
+    }
     // disarm if after time
-    if (now > base_timer + timer) { 
+    if (now > base_timer + timer) {
       state = Done_Cant_Rearm;
       color = DONE_COLOR;
       reason = Time;
@@ -305,8 +310,8 @@ void loop() {
       }
     }
     // If we are not armed and cant arm  and we are no more than 10m high re enable arming
-    if (state == Done_Cant_Rearm && 
-	((cur_altitude < base_altitude + 10) || (now > base_timer + timer + timer)) && 
+    if (state == Done_Cant_Rearm &&
+	((cur_altitude < base_altitude + 10) || (now > base_timer + timer + timer)) &&
 	(in_value < THROTTLE_LOW_US)) {
       state = Done_Can_Rearm;
     }
@@ -324,7 +329,7 @@ void loop() {
   previous_altitude_arr[pa_idx] = cur_altitude;
   pa_idx = (pa_idx + 1)/ALT_HISTORY_SIZE;
   loop_counter++;
-  // removing the delay because pulseIn function will block until 
+  // removing the delay because pulseIn function will block until
   // it gets a pulse.  This will sync us to the 50hz of the receiver
   //delay(DELAY_TIME);
 }
