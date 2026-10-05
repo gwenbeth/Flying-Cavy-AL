@@ -8,6 +8,13 @@
 
 #include <Adafruit_NeoPixel.h>
 
+// For detecting an unexpected mid-flight reboot (H4): the RP2040's own
+// power-on-reset status bit, and a watchdog scratch register we can use to
+// mirror "are we currently armed" across a reset that doesn't fully power
+// the chip down.
+#include "hardware/watchdog.h"
+#include "hardware/structs/vreg_and_chip_reset.h"
+
 // How many internal neopixels do we have? some boards have more than one!
 #define NUMPIXELS        1
 
@@ -30,6 +37,12 @@ Servo t_out;
 				   // says otherwise
 #define THROTTLE_LOW_MS 1000       // ...for this long after power up before arming is allowed
 #define THROTTLE_MIN_VALID_US 800  // pulseIn returns 0 on timeout; don't treat no signal as low
+#define WATCHDOG_TIMEOUT_MS 2000   // force a reset if loop() hangs this long (H4/E2)
+// Scratch register 4 is used internally by the SDK's watchdog_enable(); the
+// others are free for us. scratch[0] mirrors "currently Armmed" so we can
+// tell, after an unexpected reboot, whether the motor might have been
+// running when it happened.
+#define IN_FLIGHT_MAGIC 0x464C4954UL  // 'FLIT'
 
 
 // colors in the Okabe Ito pallet for friendlyness for color deficient vision
@@ -85,6 +98,7 @@ int base_altitude=0;
 unsigned long base_timer = 0;
 unsigned long loop_counter = 0;
 int arm_count = 0;
+bool flight_locked_out = false;  // set for the rest of this boot if setup() detects H4
 // We are maintaining a history of the past readings of altitude.  When 
 // we compute the vertical speed (vspd) we will look further back in time
 // than just the previous reading. This is because loop runs fast enough
@@ -98,6 +112,19 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
   delay(1000);
+
+  // H4: figure out, before anything else touches these registers, whether
+  // this boot is a genuine power-up or something rebooted us without power
+  // actually cycling (watchdog timeout, RUN-pin reset, a software reset).
+  // HAD_POR is also set by a brownout severe enough to look like a fresh
+  // power-up to the chip itself -- that case is indistinguishable from a
+  // real power-up here and isn't something this check can catch; only
+  // non-volatile storage could, and that's a separate, bigger change.
+  bool had_por = (vreg_and_chip_reset_hw->chip_reset & VREG_AND_CHIP_RESET_CHIP_RESET_HAD_POR_BITS) != 0;
+  bool scratch_says_armed = (watchdog_hw->scratch[0] == IN_FLIGHT_MAGIC);
+  bool in_flight_reset_detected = !had_por && scratch_says_armed;
+  Serial.print("had_por="); Serial.print(had_por);
+  Serial.print(" watchdog_caused_reboot="); Serial.println(watchdog_caused_reboot());
 
   // throttle input pin
   pinMode(2,INPUT);
@@ -161,8 +188,26 @@ void setup() {
   // in order to ena bright
 
 
-  throttle_low_start = millis();
-  state = Wait_For_Valid_Throttle;
+  // Enable the watchdog only now, after the sensor-not-found path above
+  // (which intentionally hangs forever) has had its chance to run --
+  // we don't want that existing fault lockup turned into a reboot loop.
+  rp2040.wdt_begin(WATCHDOG_TIMEOUT_MS);
+
+  if (in_flight_reset_detected) {
+    // The motor may have been Armmed when this reboot happened (H4): the
+    // next throttle-up would otherwise use whatever altitude we're at RIGHT
+    // NOW as a fresh base, hiding how high the plane already was. Lock out
+    // arming for the rest of this boot instead, using the same foul
+    // indication already shown for a double-arm violation.
+    state = Done_Cant_Rearm;
+    reason = Foul;
+    color = FOUL_COLOR;
+    flight_locked_out = true;
+    Serial.println("in-flight reset detected -- locking out arming for this boot (H4)");
+  } else {
+    throttle_low_start = millis();
+    state = Wait_For_Valid_Throttle;
+  }
 
   Serial.print("setup done \n");
 }
@@ -292,7 +337,7 @@ void loop() {
     }
   } else {
     // arm if you can arm and the throttle is above 20%
-    if ((state == Can_Arm || state == Done_Can_Rearm) && (in_value > 1200)) {
+    if (!flight_locked_out && (state == Can_Arm || state == Done_Can_Rearm) && (in_value > 1200)) {
       if(arm_count == 0) base_altitude = cur_altitude;
       Serial.println("starting arm");
       base_timer = now;
@@ -305,8 +350,8 @@ void loop() {
       }
     }
     // If we are not armed and cant arm  and we are no more than 10m high re enable arming
-    if (state == Done_Cant_Rearm && 
-	((cur_altitude < base_altitude + 10) || (now > base_timer + timer + timer)) && 
+    if (!flight_locked_out && state == Done_Cant_Rearm &&
+	((cur_altitude < base_altitude + 10) || (now > base_timer + timer + timer)) &&
 	(in_value < THROTTLE_LOW_US)) {
       state = Done_Can_Rearm;
     }
@@ -315,6 +360,9 @@ void loop() {
     out_value = in_value;
   }
   t_out.writeMicroseconds(out_value);
+  // H4: mirror "currently Armmed" into a watchdog scratch register so a
+  // reboot that isn't a real power-cycle can tell it happened mid-flight.
+  watchdog_hw->scratch[0] = (state == Armmed) ? IN_FLIGHT_MAGIC : 0;
   // Serial.print("Temperature: ");
   //   Serial.println(bmp.readTemperature());
   //  Serial.print("Pressure: ");
@@ -324,7 +372,8 @@ void loop() {
   previous_altitude_arr[pa_idx] = cur_altitude;
   pa_idx = (pa_idx + 1)/ALT_HISTORY_SIZE;
   loop_counter++;
-  // removing the delay because pulseIn function will block until 
+  // removing the delay because pulseIn function will block until
   // it gets a pulse.  This will sync us to the 50hz of the receiver
   //delay(DELAY_TIME);
+  rp2040.wdt_reset();  // feed the watchdog now that this pass completed (H4/E2)
 }
