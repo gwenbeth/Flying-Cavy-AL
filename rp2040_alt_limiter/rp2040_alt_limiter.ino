@@ -90,9 +90,12 @@ int arm_count = 0;
 // than just the previous reading. This is because loop runs fast enough
 // that there might not be a detectable change in altitude.  
 float previous_altitude_arr[ALT_HISTORY_SIZE];
-int pa_idx = 0; 
-// there is no reason to do this every time through the loop
-float vspd_correction = 1000.0 / (DELAY_TIME * ALT_HISTORY_SIZE);
+// Timestamp (millis()) each previous_altitude_arr entry was recorded at,
+// so vspd can divide by the real elapsed time instead of assuming the loop
+// takes exactly DELAY_TIME per pass (M5) -- actual receiver frame timing
+// varies (7-14ms is typical, not a fixed 20ms).
+uint32_t previous_time_arr[ALT_HISTORY_SIZE];
+int pa_idx = 0;
 
 void setup() {
   // put your setup code here, to run once:
@@ -144,7 +147,11 @@ void setup() {
 
   float cur_altitude = bmp.readAltitude();
 
-  for(int i = 0 ; i < ALT_HISTORY_SIZE ; i++) previous_altitude_arr[i]= cur_altitude;
+  uint32_t boot_ms = millis();
+  for(int i = 0 ; i < ALT_HISTORY_SIZE ; i++) {
+    previous_altitude_arr[i] = cur_altitude;
+    previous_time_arr[i] = boot_ms;
+  }
 
 
 #if defined(NEOPIXEL_POWER)
@@ -276,7 +283,15 @@ void loop() {
     altitude = altitude_list[alt_state];
     timer = timer_list[alt_state];
   }
-  float vspd = (cur_altitude - previous_altitude_arr[pa_idx]) * vspd_correction;
+  // Divide by the real elapsed time since that history entry was recorded
+  // (M5), not an assumed-constant loop period. static so a near-impossible
+  // elapsed_ms == 0 (same millis() tick) just keeps the last good value
+  // instead of a divide-by-zero.
+  static float vspd = 0;
+  uint32_t elapsed_ms = now - previous_time_arr[pa_idx];  // wrap-safe (unsigned)
+  if (elapsed_ms > 0) {
+    vspd = (cur_altitude - previous_altitude_arr[pa_idx]) / (elapsed_ms / 1000.0);
+  }
   if (state == Armmed) {
     // disarm if above target alt  
     if (cur_altitude + (vspd * OVERSHOOT_FACTOR)> base_altitude + altitude) {
@@ -322,6 +337,7 @@ void loop() {
   //   Serial.print("Altitude: ");
   //  Serial.println(cur_altitude);
   previous_altitude_arr[pa_idx] = cur_altitude;
+  previous_time_arr[pa_idx] = now;
   pa_idx = (pa_idx + 1)/ALT_HISTORY_SIZE;
   loop_counter++;
   // removing the delay because pulseIn function will block until 
