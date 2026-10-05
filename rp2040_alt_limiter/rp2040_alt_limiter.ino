@@ -94,6 +94,20 @@ int pa_idx = 0;
 // there is no reason to do this every time through the loop
 float vspd_correction = 1000.0 / (DELAY_TIME * ALT_HISTORY_SIZE);
 
+// Unrecoverable sensor failure during setup() (sensor not found, or a
+// config call rejected -- see M8): latch the throttle at 1000us (already
+// the default) and show a solid, unmistakable LED so the failure is visible
+// even without a serial connection, then hang forever rather than fly with
+// a sensor we can't trust.
+void fatal_sensor_error(const char *msg) {
+  Serial.println(msg);
+  pixels.begin();
+  pixels.setBrightness(20);
+  pixels.fill(FOUL_COLOR);
+  pixels.show();
+  while (1) delay(10);
+}
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
@@ -112,34 +126,36 @@ void setup() {
   if (!bmp.begin(BMP5XX_ALTERNATIVE_ADDRESS, &Wire)) {
     // For SPI mode (uncomment the line below and comment out the I2C line above):
     // if (!bmp.begin(BMP5XX_CS_PIN, &SPI)) {
-    Serial.println(F("Could not find a valid BMP5xx sensor, check wiring!"));
-    // The throttle output stays at 1000µs.  Show a solid red led so the
-    // failure is visible without a serial connection.
-    pixels.begin();
-    pixels.setBrightness(20);
-    pixels.fill(FOUL_COLOR);
-    pixels.show();
-    while (1) delay(10);
+    fatal_sensor_error("Could not find a valid BMP5xx sensor, check wiring!");
   }
-  
+
+  // Each of these returns bool; a sensor that's present but rejects its own
+  // configuration (bad I2C transaction, unsupported setting, etc.) would
+  // otherwise run with silently-wrong settings for the whole flight (M8).
+  // Every call still runs regardless of an earlier one failing -- we want
+  // the Serial log to show exactly which one(s) failed, not just the first.
+  bool sensor_config_ok = true;
   Serial.println(F("Setting temperature oversampling to 2X..."));
-  bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
+  sensor_config_ok &= bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
   Serial.println(F("Setting pressure oversampling to 16X..."));
-  bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_16X);
+  sensor_config_ok &= bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_16X);
   Serial.println(F("Setting IIR filter to coefficient 3..."));
-  bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
+  sensor_config_ok &= bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
   Serial.println(F("Setting output data rate to 50 Hz..."));
-  bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
+  sensor_config_ok &= bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
   Serial.println(F("Setting power mode to normal..."));
   desiredMode = BMP5XX_POWERMODE_NORMAL;
-  bmp.setPowerMode(desiredMode);
+  sensor_config_ok &= bmp.setPowerMode(desiredMode);
   Serial.println(F("Enabling pressure measurement..."));
-  bmp.enablePressure(true);
+  sensor_config_ok &= bmp.enablePressure(true);
   Serial.println(F("Configuring interrupt pin with data ready source..."));
-  bmp.configureInterrupt(BMP5XX_INTERRUPT_LATCHED, BMP5XX_INTERRUPT_ACTIVE_HIGH, BMP5XX_INTERRUPT_PUSH_PULL, BMP5XX_INTERRUPT_DATA_READY, true);
+  sensor_config_ok &= bmp.configureInterrupt(BMP5XX_INTERRUPT_LATCHED, BMP5XX_INTERRUPT_ACTIVE_HIGH, BMP5XX_INTERRUPT_PUSH_PULL, BMP5XX_INTERRUPT_DATA_READY, true);
 
-  
-  
+  if (!sensor_config_ok) {
+    fatal_sensor_error("One or more BMP5xx configuration calls failed, check wiring!");
+  }
+
+
   bmp.readTemperature(); // Without the readTemperature call we get bad values for altitude
 
   float cur_altitude = bmp.readAltitude();
