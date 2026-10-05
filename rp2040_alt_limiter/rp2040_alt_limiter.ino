@@ -30,6 +30,12 @@ Servo t_out;
 				   // says otherwise
 #define THROTTLE_LOW_MS 1000       // ...for this long after power up before arming is allowed
 #define THROTTLE_MIN_VALID_US 800  // pulseIn returns 0 on timeout; don't treat no signal as low
+#define THROTTLE_MAX_VALID_US 2200 // pulses outside [MIN_VALID,MAX_VALID] aren't a real throttle
+                                   // signal -- noise/glitch -- and are ignored for arming (H2)
+#define ARM_THROTTLE_US 1200       // throttle above this is "commanding arm"
+#define ARM_CONFIRM_FRAMES 4       // consecutive valid high-throttle loop passes required
+                                   // before actually arming, so a single noisy pulseIn
+                                   // reading can't arm the motor by itself (H2)
 
 
 // colors in the Okabe Ito pallet for friendlyness for color deficient vision
@@ -85,6 +91,7 @@ int base_altitude=0;
 unsigned long base_timer = 0;
 unsigned long loop_counter = 0;
 int arm_count = 0;
+int arm_confirm_count = 0;  // consecutive valid high-throttle passes seen so far (H2)
 // We are maintaining a history of the past readings of altitude.  When 
 // we compute the vertical speed (vspd) we will look further back in time
 // than just the previous reading. This is because loop runs fast enough
@@ -99,8 +106,10 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  // throttle input pin
-  pinMode(2,INPUT);
+  // throttle input pin -- pulled down so a disconnected/floating RX signal
+  // reads a steady LOW (pulseIn times out) instead of picking up noise that
+  // could look like a valid throttle-high pulse (H2)
+  pinMode(2,INPUT_PULLDOWN);
   // mode set button
   pinMode(11,INPUT);
   // throttle output pin
@@ -252,6 +261,10 @@ void loop() {
   int out_value = 1000; // by default we are going to output 1000µs 
 
   int in_value = pulseIn(2,HIGH,50000);
+  // A real RX throttle pulse falls in [THROTTLE_MIN_VALID_US,THROTTLE_MAX_VALID_US];
+  // anything else (including the 0 pulseIn returns on timeout) is noise, not a
+  // signal we should ever arm on (H2).
+  bool pulse_valid = (in_value >= THROTTLE_MIN_VALID_US) && (in_value <= THROTTLE_MAX_VALID_US);
 
   bmp.readTemperature();  // needed to get accurate readings
   float cur_altitude = bmp.readAltitude();
@@ -291,14 +304,22 @@ void loop() {
       reason = Time;
     }
   } else {
-    // arm if you can arm and the throttle is above 20%
-    if ((state == Can_Arm || state == Done_Can_Rearm) && (in_value > 1200)) {
+    // arm if you can arm and the throttle is above 20% -- but only once we've
+    // seen ARM_CONFIRM_FRAMES consecutive valid, throttle-high passes, so a
+    // single glitched/noisy pulseIn reading can't arm the motor by itself (H2)
+    if ((state == Can_Arm || state == Done_Can_Rearm) && pulse_valid && (in_value > ARM_THROTTLE_US)) {
+      arm_confirm_count++;
+    } else {
+      arm_confirm_count = 0;
+    }
+    if (arm_confirm_count >= ARM_CONFIRM_FRAMES) {
       if(arm_count == 0) base_altitude = cur_altitude;
       Serial.println("starting arm");
       base_timer = now;
       state = Armmed;
       color = ARMED_COLOR;
       arm_count++;
+      arm_confirm_count = 0;
       if (arm_count > 1) {
         color = FOUL_COLOR;
         reason = Foul;
