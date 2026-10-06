@@ -24,6 +24,10 @@ Servo t_out;
 #define DELAY_TIME 20  // this is the 20ms between servo pulses from the receiver
 #define ALT_HISTORY_SIZE 25
 #define OVERSHOOT_FACTOR 1.2
+#define ALT_CUTOFF_CONFIRM_FRAMES 2  // consecutive passes over the predicted
+                                     // altitude line required before actually
+                                     // cutting the motor -- not a single
+                                     // noisy vspd spike (M6)
 #define THROTTLE_LOW_US 1150       // throttle must be below this...
 				   // 1150 because my rx is goes from
 				   // 1100-1900 even though the tx
@@ -85,6 +89,7 @@ int base_altitude=0;
 unsigned long base_timer = 0;
 unsigned long loop_counter = 0;
 int arm_count = 0;
+int alt_cutoff_confirm_count = 0;  // consecutive over-the-line passes seen so far (M6)
 // We are maintaining a history of the past readings of altitude.  When 
 // we compute the vertical speed (vspd) we will look further back in time
 // than just the previous reading. This is because loop runs fast enough
@@ -278,12 +283,19 @@ void loop() {
   }
   float vspd = (cur_altitude - previous_altitude_arr[pa_idx]) * vspd_correction;
   if (state == Armmed) {
-    // disarm if above target alt  
+    // disarm if above target alt
+    // M6: require ALT_CUTOFF_CONFIRM_FRAMES consecutive passes over the
+    // predicted line, not a single noisy vspd spike, before committing.
     if (cur_altitude + (vspd * OVERSHOOT_FACTOR)> base_altitude + altitude) {
+      alt_cutoff_confirm_count++;
+    } else {
+      alt_cutoff_confirm_count = 0;
+    }
+    if (alt_cutoff_confirm_count >= ALT_CUTOFF_CONFIRM_FRAMES) {
       state = Done_Cant_Rearm;
       color = DONE_COLOR;
       reason = Altitude;
-    } 
+    }
     // disarm if after time
     if (now > base_timer + timer) { 
       state = Done_Cant_Rearm;
