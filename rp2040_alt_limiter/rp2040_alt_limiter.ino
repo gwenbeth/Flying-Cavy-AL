@@ -312,7 +312,16 @@ void loop() {
     }
   }
   if (state == Armmed) {
-    out_value = in_value;
+    if (in_value == 0) {
+      // pulseIn timed out -- lost/disconnected RX signal while armed.
+      // Fail safe to minimum throttle rather than relaying an invalid
+      // 0us pulse width straight to the ESC (N1).
+      out_value = 1000;
+    } else {
+      // Clamp to the servo's valid range so an implausible reading never
+      // reaches the ESC unconstrained either.
+      out_value = constrain(in_value, 1000, 2000);
+    }
   }
   t_out.writeMicroseconds(out_value);
   // Serial.print("Temperature: ");
