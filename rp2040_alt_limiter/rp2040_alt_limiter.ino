@@ -386,10 +386,9 @@ if (0) {
 #endif
       state = Done_Cant_Rearm;
       color = DONE_COLOR;
-      reason = Altitude;
-      cutoff_altitude = cur_altitude;
+      reason = reason == Foul ? Foul : Altitude;
     } else if (now > base_timer + timer) {
-      // disarm if after time
+    // disarm if after time
 #if DEBUG_OUTPUT 
       Serial.println("timer triggered");
 			Serial.print("shutting down at ");
@@ -397,7 +396,7 @@ if (0) {
 #endif
       state = Done_Cant_Rearm;
       color = DONE_COLOR;
-      reason = Time;
+      reason = reason == Foul ? Foul : Time;
     }
   } else {
     // arm if you can arm and the throttle is above 20%
