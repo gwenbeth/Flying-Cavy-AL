@@ -369,8 +369,11 @@ if (0) {
 #endif
 
   if (state == Armmed) {
-    // disarm if above target alt  
-		if (cur_altitude + (vspd * OVERSHOOT_FACTOR)> base_altitude + altitude) {
+    // disarm if above target alt -- checked first: altitude is the more
+    // specific, safety-relevant reason, and these must be mutually
+    // exclusive (else if) so a pass where both conditions are true doesn't
+    // silently overwrite reason = Altitude with reason = Time (H5)
+    if (cur_altitude + (vspd * OVERSHOOT_FACTOR)> base_altitude + altitude) {
  #if DEBUG_OUTPUT 
       Serial.println("altitude triggered");
       Serial.println(cur_altitude);
@@ -381,13 +384,12 @@ if (0) {
       Serial.println(base_altitude);
       Serial.println(altitude);
 #endif
-      cutoff_altitude = cur_altitude;
       state = Done_Cant_Rearm;
       color = DONE_COLOR;
       reason = Altitude;
-    } 
-    // disarm if after time
-    if (now > base_timer + timer) {
+      cutoff_altitude = cur_altitude;
+    } else if (now > base_timer + timer) {
+      // disarm if after time
 #if DEBUG_OUTPUT 
       Serial.println("timer triggered");
 			Serial.print("shutting down at ");
