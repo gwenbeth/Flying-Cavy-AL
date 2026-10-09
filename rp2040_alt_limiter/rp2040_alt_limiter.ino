@@ -1,6 +1,6 @@
 // F5L altitude limiter by Gwen Scogin - 2026
 
-#include <Servo.h> 
+#include <Servo.h>
 
 #include <Wire.h>
 #include <SPI.h>
@@ -27,7 +27,8 @@ Servo t_out;
 
 #define DELAY_TIME 20  // this is the 20ms between servo pulses from the receiver
 #define ALT_HISTORY_SIZE 25
-#define OVERSHOOT_FACTOR 1.2
+#define OVERSHOOT_FACTOR 0.3
+#define OVERSHOOT_THRESHOLD 4.0
 #define THROTTLE_LOW_US 1150       // throttle must be below this...
                                    // 1150 because my rx is goes from
                                    // 1100-1900 even though the tx
@@ -98,13 +99,13 @@ unsigned long loop_counter = 0;
 int arm_count = 0;
 int sensor_fail_count = 0;
 
-// We are maintaining a history of the past readings of altitude.  When 
+// We are maintaining a history of the past readings of altitude.  When
 // we compute the vertical speed (vspd) we will look further back in time
 // than just the previous reading. This is because loop runs fast enough
-// that there might not be a detectable change in altitude.  
+// that there might not be a detectable change in altitude.
 float previous_altitude_arr[ALT_HISTORY_SIZE];
 
-int pa_idx = 0; 
+int pa_idx = 0;
 
 // there is no reason to do this every time through the loop
 float vspd_correction = 1000.0 / (DELAY_TIME * ALT_HISTORY_SIZE);
@@ -117,7 +118,7 @@ void setup() {
   delay(1000);
 
 	// Setup the io pins
-	
+
   // throttle input pin
   pinMode(INPUT_PIN,INPUT);
   // mode set button
@@ -143,7 +144,7 @@ void setup() {
     pixels.show();
     while (1) delay(10);
   }
-  
+
   Serial.println(F("Setting temperature oversampling to 2X..."));
   bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
   Serial.println(F("Setting pressure oversampling to 16X..."));
@@ -163,12 +164,12 @@ void setup() {
 
 
 	// initialize the past altitude array
-	
+
 	//Add a delay here so that we get a clean measurement
 	delay(500);
 
 	// Without the readTemperature call we get bad values for altitude
-  bmp.readTemperature(); 
+  bmp.readTemperature();
 
   float cur_altitude = bmp.readAltitude();
   Serial.print("start altitude ");
@@ -231,7 +232,7 @@ int patterns[] = {
   0b1000000000,
   0b1000000000
 };
-  
+
 int alt_state = 2;
 
 
@@ -261,7 +262,7 @@ void blink(uint32_t ms) {
   default:
     s = 0;
   }
-  int light = (patterns[phase] >> s) & 1;  
+  int light = (patterns[phase] >> s) & 1;
   if (light) {
     pixels.fill(color);
     pixels.show();
@@ -290,7 +291,7 @@ int read_button(int pin) {
 
 void loop() {
 
-  int out_value = 1000; // by default we are going to output 1000µs 
+  int out_value = 1000; // by default we are going to output 1000µs
 
   int in_value = pulseIn(2,HIGH,50000);
 
@@ -324,17 +325,17 @@ void loop() {
   // has been seen continuously for THROTTLE_LOW_MS after power up.
   if (state == Wait_For_Valid_Throttle) {
     if (in_value < THROTTLE_MIN_VALID_US || in_value > THROTTLE_LOW_US) {
-      // If we don't have a valid throttle signal 
+      // If we don't have a valid throttle signal
       throttle_low_start = now;
     } else if (now - throttle_low_start >= THROTTLE_LOW_MS) {
       state = Can_Arm;
       color = READY_COLOR;
-#if DEBUG_OUTPUT 
+#if DEBUG_OUTPUT
       Serial.println("throttle low, arming enabled");
 #endif
     }
   }
-	
+
 	//Do blinking logic
   blink(now);
 
@@ -348,10 +349,8 @@ void loop() {
 	// compute vertical speed
   float vspd = (cur_altitude - previous_altitude_arr[pa_idx]) * vspd_correction;
 
-#if DEBUG_OUTPUT 
-
-if (0) {
-//	if (now / 1000 > seconds ) {
+#if DEBUG_OUTPUT
+  if (now / 1000 > seconds ) {
 		Serial.print("time ");
 		Serial.println(now/1000);
 		Serial.println(loop_counter);
@@ -369,12 +368,12 @@ if (0) {
 #endif
 
   if (state == Armmed) {
-    // disarm if above target alt -- checked first: altitude is the more
-    // specific, safety-relevant reason, and these must be mutually
-    // exclusive (else if) so a pass where both conditions are true doesn't
-    // silently overwrite reason = Altitude with reason = Time (H5)
-    if (cur_altitude + (vspd * OVERSHOOT_FACTOR)> base_altitude + altitude) {
- #if DEBUG_OUTPUT 
+    // disarm if above target alt
+    // last data gathering run showed almost no overshook when vspd
+    // was under about 4m/s and pretty low when higher
+		if (cur_altitude + ((vspd > OVERSHOOT_THRESHOLD) ? vspd * OVERSHOOT_FACTOR : 0 )
+        > base_altitude + altitude) {
+#if DEBUG_OUTPUT
       Serial.println("altitude triggered");
       Serial.println(cur_altitude);
       Serial.println(vspd * OVERSHOOT_FACTOR);
@@ -404,7 +403,7 @@ if (0) {
 			// if doing a relight we are not going to reset the base altitude
       if(arm_count == 0) base_altitude = cur_altitude;
       base_timer = now;
-#if DEBUG_OUTPUT 
+#if DEBUG_OUTPUT
       Serial.println("starting arm");
       Serial.println(base_timer);
       Serial.println(timer);
@@ -422,9 +421,9 @@ if (0) {
     // high re enable arming.  This is assuming that in a contest
     // situation that it would be reasonable to relight to keep the
     // plane from landing too far away
-    if (state == Done_Cant_Rearm && 
+    if (state == Done_Cant_Rearm &&
 				((cur_altitude < base_altitude + 20) ||
-				 (now > base_timer + timer + timer)) && 
+				 (now > base_timer + timer + timer)) &&
 				(in_value < THROTTLE_LOW_US)) {
       state = Done_Can_Rearm;
     }
