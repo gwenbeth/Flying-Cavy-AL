@@ -17,7 +17,7 @@ Adafruit_NeoPixel pixels(NUMPIXELS, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 
-#define DEBUG_OUTPUT 1
+#define DEBUG_OUTPUT 0
 
 Adafruit_BMP5xx bmp; // Create BMP5xx object
 
